@@ -257,6 +257,7 @@ export class GameBotHandlers {
       if (data === "admin:create_promo") return this.startCreatePromo(ctx);
       if (data === "admin:broadcast") return this.startBroadcast(ctx);
       if (data === "admin:stats") return this.showStats(ctx);
+      if (data === "admin:price_adjustment") return this.startPriceAdjustment(ctx);
       if (data === "admin:services") return this.showAdminServices(ctx);
       if (data.startsWith("admin:services:")) return this.showAdminServices(ctx, Number(data.split(":")[2]));
       if (data === "admin:purchases") return this.showPendingPurchases(ctx);
@@ -733,24 +734,27 @@ export class GameBotHandlers {
     const config = this.parsePricingConfig(service.pricing_config);
     const currency: "stars" | "cinders" = service.currency === "stars" ? "stars" : "cinders";
     const purchaseNumber = purchaseCount + 1;
+    const priceAdjustment = currency === "cinders" ? this.repos.getUserPriceAdjustment(user.id) : 0;
+    const applyPriceAdjustment = (price: number) => price + priceAdjustment;
 
     if (service.slug === "increase_cinder_limit") {
       const nextLimit = nextCinderLimitOffer(user.cinder_limit);
       return {
-        price: nextLimit?.price ?? service.price,
+        price: applyPriceAdjustment(nextLimit?.price ?? service.price),
         currency,
         available: Boolean(nextLimit),
         purchaseNumber,
         stageLabel: nextLimit?.stageLabel,
         currentLimit: user.cinder_limit,
         limitTarget: nextLimit?.target,
+        priceAdjustment,
       };
     }
 
     if (service.pricing_type === "incremental") {
       const start = Number.isInteger(config.start) ? config.start! : service.price;
       const step = Number.isInteger(config.step) ? config.step! : 0;
-      return { price: start + purchaseCount * step, currency, available: true, purchaseNumber };
+      return { price: applyPriceAdjustment(start + purchaseCount * step), currency, available: true, purchaseNumber, priceAdjustment };
     }
 
     if (service.pricing_type === "ladder_once" || service.pricing_type === "ladder_repeat_last") {
@@ -758,20 +762,22 @@ export class GameBotHandlers {
       const available = service.pricing_type !== "ladder_once" || purchaseCount < prices.length;
       const index = Math.min(purchaseCount, Math.max(0, prices.length - 1));
       return {
-        price: prices[index] ?? service.price,
+        price: applyPriceAdjustment(prices[index] ?? service.price),
         currency,
         available,
         purchaseNumber,
         stageLabel: config.stages?.[index],
+        priceAdjustment,
       };
     }
 
     return {
-      price: service.price,
+      price: applyPriceAdjustment(service.price),
       currency,
       available: true,
       purchaseNumber,
       rewardCinders: config.rewardCinders,
+      priceAdjustment,
     };
   }
 
@@ -1253,6 +1259,24 @@ export class GameBotHandlers {
     );
   }
 
+  private async startPriceAdjustment(ctx: BotContext) {
+    const admin = await this.requireAdmin(ctx);
+    if (!admin || !ctx.from) return;
+    this.repos.setState(ctx.from.id, "price_adjustment", "user", {});
+    await render(
+      ctx,
+      [
+        "<b>Персональная наценка</b>",
+        "",
+        "Введи пользователя, которому нужно повысить цены на услуги.",
+        "",
+        "Пример: <code>@username</code> или Telegram ID.",
+        "Пользователь уже должен быть в базе бота.",
+      ].join("\n"),
+      cancelFlowKeyboard(),
+    );
+  }
+
   private async startSetDonorTitle(ctx: BotContext) {
     const user = await this.ensureUser(ctx);
     if (!ctx.from || ctx.chat?.type !== "private") return;
@@ -1536,6 +1560,10 @@ export class GameBotHandlers {
     }
     if (state.flow === "remove_title") {
       await this.continueRemoveTitleFlow(ctx, user, text);
+      return true;
+    }
+    if (state.flow === "price_adjustment") {
+      await this.continuePriceAdjustmentFlow(ctx, user, state.step, data, text);
       return true;
     }
     if (state.flow === "broadcast") {
@@ -1875,6 +1903,60 @@ export class GameBotHandlers {
     await render(ctx, `Титул снят с ${escapeHtml(usernameOrName(target))}.`, titlesMenuKeyboard());
   }
 
+  private async continuePriceAdjustmentFlow(
+    ctx: BotContext,
+    admin: UserRecord,
+    step: string,
+    data: StateData,
+    text: string,
+  ) {
+    if (step === "user") {
+      const target = this.findUserByAdminInput(text);
+      if (!target) {
+        await ctx.reply("Пользователь не найден в базе бота. Он должен сначала написать боту /start.");
+        return;
+      }
+      const currentAdjustment = this.repos.getUserPriceAdjustment(target.id);
+      this.repos.setState(admin.telegram_id, "price_adjustment", "amount", { targetUserId: target.id });
+      await ctx.reply(
+        [
+          `<b>${escapeHtml(usernameOrName(target))}</b>`,
+          "",
+          `Текущая персональная наценка: <b>${formatCinders(currentAdjustment)}</b>.`,
+          "",
+          `Введи сумму наценки от 0 до ${formatCinders(maxEconomyAmount)}.`,
+          "0 снимет персональную наценку.",
+        ].join("\n"),
+        { parse_mode: parseMode, ...cancelFlowKeyboard() } as never,
+      );
+      return;
+    }
+
+    if (step === "amount") {
+      const targetUserId = Number(data.targetUserId);
+      const target = Number.isInteger(targetUserId) ? this.repos.getUserById(targetUserId) : undefined;
+      if (!target) {
+        this.repos.clearState(admin.telegram_id);
+        await ctx.reply("Пользователь больше не найден в базе. Настройка отменена.");
+        return;
+      }
+
+      const amount = Number(text.replace(/\s+/g, ""));
+      if (!Number.isInteger(amount) || amount < 0 || amount > maxEconomyAmount) {
+        await ctx.reply(`Введи целое число от 0 до ${formatAmount(maxEconomyAmount)}.`);
+        return;
+      }
+
+      this.repos.setUserPriceAdjustment(target.id, amount, admin.id);
+      this.repos.clearState(admin.telegram_id);
+      const message =
+        amount > 0
+          ? `Для ${escapeHtml(usernameOrName(target))} установлена персональная наценка <b>+${formatCinders(amount)}</b> ко всем услугам за Угольки.`
+          : `Персональная наценка для ${escapeHtml(usernameOrName(target))} снята.`;
+      await render(ctx, message, adminKeyboard());
+    }
+  }
+
   private async continueDonorTitleFlow(ctx: BotContext, user: UserRecord, text: string) {
     if (this.repos.donorTitleActionsLeft(user) <= 0) {
       this.repos.clearState(user.telegram_id);
@@ -1974,7 +2056,7 @@ export class GameBotHandlers {
       if (lower === "угольки") return this.commandBalance(ctx, rest);
       if (lower === "мои" && rest[0]?.toLowerCase() === "угольки") return this.replyProfile(ctx, user);
       if (lower === "промокод") return this.commandPromo(ctx, user, rest);
-      if (lower === "разжечь") return this.commandGrant(ctx, user, rest);
+      if (lower === "разжечь" || lower === "выдать") return this.commandGrant(ctx, user, rest);
       if (lower === "пригасить") return this.commandTake(ctx, user, rest);
     } catch (error) {
       await ctx.reply(error instanceof Error ? error.message : "Не удалось выполнить команду.");
@@ -2057,7 +2139,10 @@ export class GameBotHandlers {
     const target = this.resolveTargetUser(ctx, args[0]);
     const amountText = target.usedReply ? args[0] : args[1];
     const amount = Number(amountText);
-    if (!target.user || !Number.isInteger(amount) || amount <= 0) throw new Error("Пример: .разжечь @username 100");
+    if (!target.user) {
+      throw new Error("Пользователь не найден в базе бота. Он должен сначала написать боту /start.");
+    }
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error("Пример: .разжечь @username 100 или .выдать @username 100");
     if (amount > maxEconomyAmount) throw new Error(`Максимальное разовое начисление: ${formatAmount(maxEconomyAmount)} Угольков.`);
     if (!this.hasCinderSpace(target.user, amount)) {
       await ctx.reply(this.cinderLimitRecipientErrorText(target.user, amount, "grant"), {
@@ -2128,6 +2213,13 @@ export class GameBotHandlers {
     }
     if (!arg) return { usedReply: false };
     return { user: this.repos.getUserByUsername(arg), usedReply: false };
+  }
+
+  private findUserByAdminInput(input: string) {
+    const value = input.trim();
+    if (!value) return undefined;
+    if (/^\d+$/.test(value)) return this.repos.getUserByTelegramId(Number(value));
+    return this.repos.getUserByUsername(value);
   }
 
   private getBroadcastDataOrThrow(telegramId: number, expectedStep?: string) {

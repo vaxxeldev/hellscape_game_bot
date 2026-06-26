@@ -22,6 +22,8 @@ export type UserRecord = {
   cinder_limit: number;
   total_received: number;
   total_spent: number;
+  last_activity_at: string;
+  last_inactivity_penalty_at: string | null;
   joined_at: string;
   updated_at: string;
 };
@@ -96,6 +98,14 @@ export type TitleRecord = {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+};
+
+export type UserPriceAdjustmentRecord = {
+  user_id: number;
+  amount: number;
+  admin_user_id: number | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type StarDonationRecord = {

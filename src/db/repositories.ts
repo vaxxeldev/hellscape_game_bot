@@ -4,6 +4,7 @@ import type {
   PurchaseStatus,
   ServiceRecord,
   TitleRecord,
+  UserPriceAdjustmentRecord,
   UserRecord,
   UserRole,
   UserStateRecord,
@@ -28,12 +29,13 @@ export class Repositories {
   }) {
     this.db.run(
       `
-      INSERT INTO users (telegram_id, username, first_name, last_name, role, updated_at)
-      VALUES (:telegramId, :username, :firstName, :lastName, :role, :updatedAt)
+      INSERT INTO users (telegram_id, username, first_name, last_name, role, last_activity_at, updated_at)
+      VALUES (:telegramId, :username, :firstName, :lastName, :role, :updatedAt, :updatedAt)
       ON CONFLICT(telegram_id) DO UPDATE SET
         username = excluded.username,
         first_name = excluded.first_name,
         last_name = excluded.last_name,
+        last_activity_at = excluded.last_activity_at,
         role = CASE
           WHEN users.role = 'owner' THEN users.role
           WHEN excluded.role IN ('owner', 'admin', 'developer') THEN excluded.role
@@ -62,6 +64,41 @@ export class Repositories {
       "SELECT * FROM users WHERE username = :username COLLATE NOCASE ORDER BY updated_at DESC LIMIT 1",
       { username: cleanUsername(username) },
     );
+  }
+
+  getUserPriceAdjustment(userId: number) {
+    return (
+      this.db.get<UserPriceAdjustmentRecord>(
+        "SELECT * FROM user_price_adjustments WHERE user_id = :userId",
+        { userId },
+      )?.amount ?? 0
+    );
+  }
+
+  setUserPriceAdjustment(userId: number, amount: number, adminUserId?: number | null) {
+    if (!Number.isInteger(amount) || amount < 0) throw new Error("Price adjustment must be a non-negative integer");
+
+    if (amount === 0) {
+      this.db.run("DELETE FROM user_price_adjustments WHERE user_id = :userId", { userId });
+      return this.getUserById(userId);
+    }
+
+    this.db.run(
+      `
+      INSERT INTO user_price_adjustments (user_id, amount, admin_user_id, updated_at)
+      VALUES (:userId, :amount, :adminUserId, :now)
+      ON CONFLICT(user_id) DO UPDATE SET
+        amount = excluded.amount,
+        admin_user_id = excluded.admin_user_id,
+        updated_at = excluded.updated_at
+      `,
+      { userId, amount, adminUserId: adminUserId ?? null, now: nowIso() },
+    );
+    return this.getUserById(userId);
+  }
+
+  getUserById(id: number) {
+    return this.db.get<UserRecord>("SELECT * FROM users WHERE id = :id", { id });
   }
 
   listUsers(limit = 50) {
@@ -287,6 +324,66 @@ export class Repositories {
 
     const updatedUser = this.adjustBalance({ ...input, amount: credited });
     return { credited, user: updatedUser };
+  }
+
+  listUsersForInactivityPenalty(cutoffIso: string, limit = 200) {
+    return this.db.query<UserRecord>(
+      `
+      SELECT *
+      FROM users
+      WHERE balance > 0
+        AND status = 'active'
+        AND role NOT IN ('owner', 'admin', 'developer')
+        AND last_activity_at <= :cutoffIso
+        AND (
+          last_inactivity_penalty_at IS NULL
+          OR last_inactivity_penalty_at < last_activity_at
+        )
+      ORDER BY last_activity_at ASC
+      LIMIT :limit
+      `,
+      { cutoffIso, limit },
+    );
+  }
+
+  applyInactivityPenalty(userId: number, percent: number, reason: string) {
+    if (!Number.isFinite(percent) || percent <= 0 || percent >= 1) throw new Error("Penalty percent must be between 0 and 1");
+
+    return this.db.transaction(() => {
+      const user = this.getUserById(userId);
+      if (!user || user.balance <= 0) return { user, deducted: 0 };
+
+      const deducted = Math.min(user.balance, Math.max(1, Math.ceil(user.balance * percent)));
+      const nextBalance = user.balance - deducted;
+      const now = nowIso();
+
+      this.db.run(
+        `
+        UPDATE users
+        SET balance = :balance,
+            last_inactivity_penalty_at = :now,
+            updated_at = :now
+        WHERE id = :userId
+        `,
+        { userId, balance: nextBalance, now },
+      );
+
+      this.db.run(
+        `
+        INSERT INTO transactions (user_id, amount, type, balance_after, reason)
+        VALUES (:userId, :amount, :type, :balanceAfter, :reason)
+        `,
+        {
+          userId,
+          amount: -deducted,
+          type: "inactivity_penalty",
+          balanceAfter: nextBalance,
+          reason,
+        },
+      );
+
+      return { user: this.getUserById(userId)!, deducted };
+    });
   }
 
   transfer(fromUserId: number, toUserId: number, amount: number) {

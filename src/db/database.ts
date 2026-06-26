@@ -61,6 +61,8 @@ export class Database {
         cinder_limit INTEGER NOT NULL DEFAULT 500 CHECK (cinder_limit >= 0),
         total_received INTEGER NOT NULL DEFAULT 0 CHECK (total_received >= 0),
         total_spent INTEGER NOT NULL DEFAULT 0 CHECK (total_spent >= 0),
+        last_activity_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_inactivity_penalty_at TEXT,
         joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
@@ -215,6 +217,14 @@ export class Database {
         data TEXT NOT NULL,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS user_price_adjustments (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        amount INTEGER NOT NULL CHECK (amount >= 0),
+        admin_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
     `);
     this.addColumnIfMissing("services", "deleted_at", "TEXT");
     this.addColumnIfMissing("promo_codes", "deleted_at", "TEXT");
@@ -222,6 +232,13 @@ export class Database {
     this.addColumnIfMissing("users", "donor_title_actions_used", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("users", "donor_title_bonus_actions", "INTEGER NOT NULL DEFAULT 0");
     this.addColumnIfMissing("users", "cinder_limit", "INTEGER NOT NULL DEFAULT 500");
+    this.addColumnIfMissing("users", "last_activity_at", "TEXT");
+    this.addColumnIfMissing("users", "last_inactivity_penalty_at", "TEXT");
+    this.db.exec(`
+      UPDATE users
+      SET last_activity_at = COALESCE(last_activity_at, CURRENT_TIMESTAMP)
+      WHERE last_activity_at IS NULL;
+    `);
     this.db.exec(`
       UPDATE users
       SET cinder_limit = CASE

@@ -169,6 +169,7 @@ export function adminKeyboard() {
       callbackButton("Промокоды", "admin:promos", premiumEmoji.receiveMoney, "primary"),
       callbackButton("Титулы", "admin:titles", premiumEmoji.tag, "primary"),
     ],
+    [callbackButton("Персональная наценка", "admin:price_adjustment", premiumEmoji.growthChart, "primary")],
     [callbackButton("Статистика", "admin:stats", premiumEmoji.statsChart), callbackButton("Рассылка", "admin:broadcast", premiumEmoji.announcement)],
   ]);
 }

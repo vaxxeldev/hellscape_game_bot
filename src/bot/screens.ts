@@ -29,6 +29,7 @@ export type ServiceOfferView = {
   stageLabel?: string;
   currentLimit?: number;
   limitTarget?: number;
+  priceAdjustment?: number;
 };
 
 function starsLabel() {
@@ -65,6 +66,8 @@ export function profileText(user: UserRecord) {
     `${pe(premiumEmoji.lockClosed, "🔒")} Лимит: <b>${formatCinders(user.cinder_limit)}</b>`,
     `${pe(premiumEmoji.receiveMoney, "🏧")} Получено всего: <b>${formatCinders(user.total_received)}</b>`,
     `${pe(premiumEmoji.sendMoney, "🪙")} Потрачено всего: <b>${formatCinders(user.total_spent)}</b>`,
+    "",
+    `${pe(premiumEmoji.clock, "⏰")} Если 3 дня не проявлять активность в боте, с баланса спишется 15% Угольков. Админов и разработчика правило не затрагивает.`,
   ].join("\n");
 }
 
@@ -119,7 +122,11 @@ export function serviceText(service: ServiceRecord, user: UserRecord, offer: Ser
       ? `${pe(premiumEmoji.lockClosed, "🔒")} Лимит: <b>${formatCinders(offer.currentLimit)}</b> → <b>${formatCinders(offer.limitTarget)}</b>`
       : null;
   const pricingHint = servicePricingHint(service.pricing_type);
-  const pricingLines = [priceLine, rewardLine, limitLine, stageLine, pricingHint].filter(Boolean);
+  const adjustmentLine =
+    offer.currency === "cinders" && offer.priceAdjustment
+      ? `${pe(premiumEmoji.growthChart, "📊")} Персональная наценка: <b>+${formatCinders(offer.priceAdjustment)}</b>`
+      : null;
+  const pricingLines = [priceLine, adjustmentLine, rewardLine, limitLine, stageLine, pricingHint].filter(Boolean);
   const balanceLines = [
     offer.currency === "cinders" ? `${pe(premiumEmoji.wallet, "👛")} Твой баланс: <b>${formatCinders(user.balance)}</b>` : null,
     `${pe(premiumEmoji.clock, "⏰")} Выдача: <b>${service.requires_approval ? "после подтверждения админом" : "автоматически"}</b>`,
@@ -203,6 +210,7 @@ export function helpText(config: AppConfig) {
     "<code>.промокод КОД</code> - активировать промокод.",
     "",
     `${pe(premiumEmoji.lockClosed, "🔒")} Лимит баланса защищает экономику: если Угольки не помещаются, сначала увеличь лимит в лавке или потрать часть баланса.`,
+    `${pe(premiumEmoji.clock, "⏰")} Неактивность: если 3 дня не пользоваться ботом, с профиля спишется 15% текущих Угольков. Админы и разработчик исключены.`,
   ].join("\n");
 }
 

@@ -8,6 +8,7 @@ import { logger } from "./utils/logger.js";
 import type { BotContext } from "./types.js";
 import { catalogServices } from "./services/catalog.js";
 import { startWeeklyTopRewards } from "./jobs/weeklyTopRewards.js";
+import { startInactivityPenalty } from "./jobs/inactivityPenalty.js";
 
 const config = loadConfig();
 const db = new Database(config.databaseUrl);
@@ -29,6 +30,7 @@ bot.catch((error, ctx) => {
 
 new GameBotHandlers(bot, repos, loadConfig).register();
 const stopWeeklyTopRewards = startWeeklyTopRewards(bot, repos, loadConfig);
+const stopInactivityPenalty = startInactivityPenalty(bot, repos, loadConfig);
 
 await launchWithRetry();
 
@@ -50,6 +52,7 @@ async function launchWithRetry() {
 function shutdown(signal: string) {
   logger.info({ signal }, "shutting down");
   stopWeeklyTopRewards();
+  stopInactivityPenalty();
   bot.stop(signal);
   db.close();
 }
