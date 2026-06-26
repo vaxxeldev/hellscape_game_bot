@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+node_modules
+dist
+data
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+game_bot.out.log
+game_bot.err.log
+bot.stdout.log
+bot.stderr.log
+run.local.log
