@@ -1,6 +1,5 @@
 FROM node:20-bookworm-slim
 
-ENV NODE_ENV=production
 ENV DATABASE_URL=file:/app/data/game_bot.sqlite
 
 WORKDIR /usr/src/app
@@ -10,7 +9,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --include=dev
 
 COPY . .
 RUN npm run build \
@@ -18,4 +17,5 @@ RUN npm run build \
   && mkdir -p /app/data \
   && chmod 777 /app/data
 
+ENV NODE_ENV=production
 CMD ["node", "dist/index.js"]
