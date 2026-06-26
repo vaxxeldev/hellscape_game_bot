@@ -13,6 +13,7 @@ const config = loadConfig();
 const db = new Database(config.databaseUrl);
 const repos = new Repositories(db);
 repos.seedCatalogServices(catalogServices);
+logger.info({ databasePath: db.filePath, databaseUrl: config.databaseUrl, stats: repos.stats() }, "database ready");
 const telegramAgent = config.telegramProxyUrl ? new HttpsProxyAgent(config.telegramProxyUrl) : undefined;
 
 const bot = new Telegraf<BotContext>(config.botToken, {

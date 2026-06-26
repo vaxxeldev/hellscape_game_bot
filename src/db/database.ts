@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
+import nodePath from "node:path";
 import BetterSqlite3 from "better-sqlite3";
 import type { Database as SqliteDatabase, RunResult } from "better-sqlite3";
 
@@ -7,12 +7,13 @@ type SQLInputValue = string | number | bigint | Buffer | null;
 
 export class Database {
   private readonly db: SqliteDatabase;
+  readonly filePath: string;
 
   constructor(databaseUrl: string) {
     const filePath = databaseUrl.startsWith("file:") ? databaseUrl.slice("file:".length) : databaseUrl;
-    const resolvedPath = path.resolve(process.cwd(), filePath);
-    fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
-    this.db = new BetterSqlite3(resolvedPath, { timeout: 5000 });
+    this.filePath = nodePath.resolve(process.cwd(), filePath);
+    fs.mkdirSync(nodePath.dirname(this.filePath), { recursive: true });
+    this.db = new BetterSqlite3(this.filePath, { timeout: 5000 });
     this.db.exec(`
       PRAGMA foreign_keys = ON;
       PRAGMA journal_mode = WAL;

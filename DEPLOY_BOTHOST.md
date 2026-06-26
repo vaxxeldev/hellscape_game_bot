@@ -20,7 +20,7 @@ Required environment variables:
 
 Database:
 
-- The Dockerfile sets `DATABASE_URL=file:/app/data/game_bot.sqlite`.
+- The Dockerfile sets `DATABASE_URL=file:/app/data/flood_games.sqlite`.
 - Do not commit SQLite files.
 - Bothost keeps `/app/data` between deploys, so balances, promos and purchases survive updates.
 

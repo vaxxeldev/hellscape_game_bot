@@ -1,6 +1,7 @@
 FROM node:20-bookworm-slim
 
-ENV DATABASE_URL=file:/app/data/game_bot.sqlite
+ENV NODE_ENV=production
+ENV DATABASE_URL=file:/app/data/flood_games.sqlite
 
 WORKDIR /usr/src/app
 
@@ -17,5 +18,4 @@ RUN npm run build \
   && mkdir -p /app/data \
   && chmod 777 /app/data
 
-ENV NODE_ENV=production
 CMD ["node", "dist/index.js"]
