@@ -162,8 +162,8 @@ export function topKeyboard(
   return inlineKeyboard(rows);
 }
 
-export function adminKeyboard() {
-  return inlineKeyboard([
+export function adminKeyboard(canCompensate = false) {
+  const rows: InlineButton[][] = [
     [callbackButton("Создать услугу", "admin:create_service", premiumEmoji.pencil, "success")],
     [
       callbackButton("Услуги", "admin:services", premiumEmoji.gift, "primary"),
@@ -175,7 +175,9 @@ export function adminKeyboard() {
     ],
     [callbackButton("Персональная наценка", "admin:price_adjustment", premiumEmoji.growthChart, "primary")],
     [callbackButton("Статистика", "admin:stats", premiumEmoji.statsChart), callbackButton("Рассылка", "admin:broadcast", premiumEmoji.announcement)],
-  ]);
+  ];
+  if (canCompensate) rows.push([callbackButton("Компенсация", "admin:compensation", premiumEmoji.gift, "success")]);
+  return inlineKeyboard(rows);
 }
 
 export function adminServicesKeyboard(services: ServiceRecord[], options: { page: number; total: number; perPage: number }) {
@@ -321,6 +323,15 @@ export function broadcastConfirmKeyboard() {
     [
       callbackButton("Отправить", "bc:confirm", premiumEmoji.send, "success"),
       callbackButton("Отмена", "bc:cancel", premiumEmoji.cross, "danger"),
+    ],
+  ]);
+}
+
+export function compensationConfirmKeyboard() {
+  return inlineKeyboard([
+    [
+      callbackButton("Выдать компенсацию", "flow:compensation:confirm", premiumEmoji.check, "success"),
+      callbackButton("Отмена", "flow:cancel", premiumEmoji.cross, "danger"),
     ],
   ]);
 }

@@ -8,3 +8,9 @@
 - Added admin-specific back navigation for admin stats and reviewed purchase screens.
 - Files: src/bot/keyboards.ts, src/bot/handlers.ts.
 - Reason: keep admin flows returning to the admin panel instead of the regular /start home screen.
+
+2026-06-30
+- Added developer-only compensation flow with preflight limit checks and atomic mass crediting.
+- Excluded developer from public top lists, weekly top rewards, and admin receiver stats.
+- Files: src/db/repositories.ts, src/bot/handlers.ts, src/bot/keyboards.ts, src/jobs/weeklyTopRewards.ts, tests/test_compensation_and_tops.py.
+- Reason: let developer compensate regular users after bot issues without affecting competitive economy or admin/developer balances.

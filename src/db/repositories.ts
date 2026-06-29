@@ -112,18 +112,56 @@ export class Repositories {
     );
   }
 
-  topUsers(limit: number, offset: number) {
+  listCompensationRecipients(excludedTelegramIds: number[], limit = 100000) {
+    const excluded = this.excludedTelegramIdsClause("telegram_id", excludedTelegramIds);
     return this.db.query<UserRecord>(
-      "SELECT * FROM users WHERE balance > 0 ORDER BY balance DESC, total_received DESC, id ASC LIMIT :limit OFFSET :offset",
-      { limit, offset },
+      `
+      SELECT *
+      FROM users
+      WHERE status != 'banned'
+        AND role NOT IN ('owner', 'admin', 'developer')
+        ${excluded.sql}
+      ORDER BY joined_at ASC, id ASC
+      LIMIT :limit
+      `,
+      { ...excluded.params, limit },
     );
   }
 
-  countTopUsers() {
-    return this.db.get<{ count: number }>("SELECT COUNT(*) AS count FROM users WHERE balance > 0")?.count ?? 0;
+  topUsers(limit: number, offset: number, excludedTelegramIds: number[] = []) {
+    const excluded = this.excludedTelegramIdsClause("telegram_id", excludedTelegramIds);
+    return this.db.query<UserRecord>(
+      `
+      SELECT *
+      FROM users
+      WHERE balance > 0
+        AND role != 'developer'
+        ${excluded.sql}
+      ORDER BY balance DESC, total_received DESC, id ASC
+      LIMIT :limit OFFSET :offset
+      `,
+      { ...excluded.params, limit, offset },
+    );
   }
 
-  weeklyTopUsers(startIso: string, endIso: string, limit: number, offset: number) {
+  countTopUsers(excludedTelegramIds: number[] = []) {
+    const excluded = this.excludedTelegramIdsClause("telegram_id", excludedTelegramIds);
+    return (
+      this.db.get<{ count: number }>(
+        `
+        SELECT COUNT(*) AS count
+        FROM users
+        WHERE balance > 0
+          AND role != 'developer'
+          ${excluded.sql}
+        `,
+        excluded.params,
+      )?.count ?? 0
+    );
+  }
+
+  weeklyTopUsers(startIso: string, endIso: string, limit: number, offset: number, excludedTelegramIds: number[] = []) {
+    const excluded = this.excludedTelegramIdsClause("u.telegram_id", excludedTelegramIds);
     return this.db.query<WeeklyTopUserRecord>(
       `
       SELECT u.*, SUM(t.amount) AS weekly_score
@@ -133,32 +171,38 @@ export class Repositories {
         AND t.created_at < :endIso
         AND t.amount > 0
         AND t.type IN ('grant', 'promo', 'stars_purchase', 'support_reward')
+        AND u.role != 'developer'
+        ${excluded.sql}
       GROUP BY u.id
       HAVING weekly_score > 0
       ORDER BY weekly_score DESC, u.balance DESC, u.id ASC
       LIMIT :limit OFFSET :offset
       `,
-      { startIso, endIso, limit, offset },
+      { ...excluded.params, startIso, endIso, limit, offset },
     );
   }
 
-  countWeeklyTopUsers(startIso: string, endIso: string) {
+  countWeeklyTopUsers(startIso: string, endIso: string, excludedTelegramIds: number[] = []) {
+    const excluded = this.excludedTelegramIdsClause("u.telegram_id", excludedTelegramIds);
     return (
       this.db.get<{ count: number }>(
         `
         SELECT COUNT(*) AS count
         FROM (
-          SELECT user_id
-          FROM transactions
-          WHERE created_at >= :startIso
-            AND created_at < :endIso
-            AND amount > 0
-            AND type IN ('grant', 'promo', 'stars_purchase', 'support_reward')
-          GROUP BY user_id
+          SELECT t.user_id
+          FROM transactions t
+          JOIN users u ON u.id = t.user_id
+          WHERE t.created_at >= :startIso
+            AND t.created_at < :endIso
+            AND t.amount > 0
+            AND t.type IN ('grant', 'promo', 'stars_purchase', 'support_reward')
+            AND u.role != 'developer'
+            ${excluded.sql}
+          GROUP BY t.user_id
           HAVING SUM(amount) > 0
         )
         `,
-        { startIso, endIso },
+        { ...excluded.params, startIso, endIso },
       )?.count ?? 0
     );
   }
@@ -184,13 +228,17 @@ export class Repositories {
     startIso: string;
     endIso: string;
     rewards: number[];
+    excludedTelegramIds?: number[];
   }) {
     return this.db.transaction(() => {
       if (this.weeklyRewardProcessed(input.weekKey)) {
-        return { paid: false, winners: this.weeklyTopUsers(input.startIso, input.endIso, input.rewards.length, 0) };
+        return {
+          paid: false,
+          winners: this.weeklyTopUsers(input.startIso, input.endIso, input.rewards.length, 0, input.excludedTelegramIds ?? []),
+        };
       }
 
-      const winners = this.weeklyTopUsers(input.startIso, input.endIso, input.rewards.length, 0);
+      const winners = this.weeklyTopUsers(input.startIso, input.endIso, input.rewards.length, 0, input.excludedTelegramIds ?? []);
       this.db.run(
         `
         INSERT INTO weekly_top_runs (week_key, start_iso, end_iso, winners_count)
@@ -324,6 +372,53 @@ export class Repositories {
 
     const updatedUser = this.adjustBalance({ ...input, amount: credited });
     return { credited, user: updatedUser };
+  }
+
+  previewCompensation(amount: number, excludedTelegramIds: number[]) {
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error("Amount must be a positive integer");
+    const recipients = this.listCompensationRecipients(excludedTelegramIds);
+    const blocked = recipients
+      .map((user) => ({ user, freeSpace: freeCinderSpace(user.balance, user.cinder_limit) }))
+      .filter((item) => item.freeSpace < amount);
+    const activeUsers = this.listBroadcastUsers();
+    return {
+      recipients,
+      blocked,
+      excludedCount: Math.max(0, activeUsers.length - recipients.length),
+    };
+  }
+
+  applyCompensation(input: {
+    amount: number;
+    reason: string;
+    developerUserId: number;
+    excludedTelegramIds: number[];
+  }) {
+    if (!Number.isInteger(input.amount) || input.amount <= 0) throw new Error("Amount must be a positive integer");
+    const reason = input.reason.trim();
+    if (!reason) throw new Error("Reason is required");
+
+    return this.db.transaction(() => {
+      const preview = this.previewCompensation(input.amount, input.excludedTelegramIds);
+      if (preview.blocked.length > 0) {
+        throw new Error("Не у всех участников хватает лимита для полной компенсации.");
+      }
+
+      const updatedUsers = preview.recipients.map((user) =>
+        this.adjustBalance({
+          userId: user.id,
+          amount: input.amount,
+          type: "compensation",
+          adminUserId: input.developerUserId,
+          reason,
+        }),
+      );
+
+      return {
+        recipients: updatedUsers,
+        excludedCount: preview.excludedCount,
+      };
+    });
   }
 
   listUsersForInactivityPenalty(cutoffIso: string, limit = 200) {
@@ -1118,11 +1213,36 @@ export class Repositories {
     };
   }
 
-  topReceivers(limit = 5) {
+  topReceivers(limit = 5, excludedTelegramIds: number[] = []) {
+    const excluded = this.excludedTelegramIdsClause("telegram_id", excludedTelegramIds);
     return this.db.query<UserRecord>(
-      "SELECT * FROM users ORDER BY total_received DESC, balance DESC LIMIT :limit",
-      { limit },
+      `
+      SELECT *
+      FROM users
+      WHERE role != 'developer'
+        ${excluded.sql}
+      ORDER BY total_received DESC, balance DESC
+      LIMIT :limit
+      `,
+      { ...excluded.params, limit },
     );
+  }
+
+  private excludedTelegramIdsClause(column: string, excludedTelegramIds: number[]) {
+    const ids = [...new Set(excludedTelegramIds.filter((id) => Number.isInteger(id)))];
+    const params: Record<string, number> = {};
+    if (!ids.length) return { sql: "", params };
+
+    const placeholders = ids.map((id, index) => {
+      const key = `excludedTelegramId${index}`;
+      params[key] = id;
+      return `:${key}`;
+    });
+
+    return {
+      sql: `AND ${column} NOT IN (${placeholders.join(", ")})`,
+      params,
+    };
   }
 }
 

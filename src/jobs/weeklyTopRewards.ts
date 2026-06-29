@@ -29,6 +29,7 @@ export function startWeeklyTopRewards(
         startIso: period.startIso,
         endIso: period.endIso,
         rewards: weeklyRewards,
+        excludedTelegramIds: topExcludedTelegramIds(getConfig()),
       });
 
       const payouts = "payouts" in result ? (result.payouts ?? []) : [];
@@ -49,6 +50,10 @@ export function startWeeklyTopRewards(
     clearTimeout(firstRun);
     clearInterval(interval);
   };
+}
+
+function topExcludedTelegramIds(config: AppConfig) {
+  return [config.developerId].filter((id): id is number => typeof id === "number" && Number.isInteger(id));
 }
 
 async function notifyWeeklyWinners(

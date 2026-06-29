@@ -20,6 +20,7 @@ import {
   broadcastMediaKeyboard,
   cindersStarsKeyboard,
   cancelFlowKeyboard,
+  compensationConfirmKeyboard,
   confirmFlowKeyboard,
   donorTitleKeyboard,
   mainMenuKeyboard,
@@ -102,6 +103,11 @@ type BroadcastData = StateData & {
   confirmMessageId?: number;
 };
 
+type CompensationData = StateData & {
+  reason?: string;
+  amount?: number;
+};
+
 const broadcastDelayMs = 60;
 const maxEconomyAmount = 1_000_000;
 const maxPromoCodeLength = 32;
@@ -109,6 +115,7 @@ const maxPromoActivations = 100_000;
 const maxServiceTitleLength = 64;
 const maxServiceDescriptionLength = 800;
 const maxBroadcastTextLength = 4096;
+const maxCompensationReasonLength = 800;
 const adminServicesPerPage = 5;
 
 const messageEffects = {
@@ -257,6 +264,7 @@ export class GameBotHandlers {
       if (data === "admin:create_service") return this.startCreateService(ctx);
       if (data === "admin:create_promo") return this.startCreatePromo(ctx);
       if (data === "admin:broadcast") return this.startBroadcast(ctx);
+      if (data === "admin:compensation") return this.startCompensation(ctx);
       if (data === "admin:stats") return this.showStats(ctx);
       if (data === "admin:price_adjustment") return this.startPriceAdjustment(ctx);
       if (data === "admin:services") return this.showAdminServices(ctx);
@@ -286,6 +294,7 @@ export class GameBotHandlers {
       if (data.startsWith("flow:service_pricing:")) return this.setServicePricingMode(ctx, data.split(":")[2]);
       if (data === "flow:service:confirm") return this.confirmService(ctx);
       if (data === "flow:promo:confirm") return this.confirmPromo(ctx);
+      if (data === "flow:compensation:confirm") return this.confirmCompensation(ctx);
       if (data === "bc:skip_media") return this.skipBroadcastMedia(ctx);
       if (data === "bc:add_button") return this.startBroadcastButton(ctx);
       if (data === "bc:skip_button") return this.skipBroadcastButton(ctx);
@@ -457,14 +466,22 @@ export class GameBotHandlers {
   private async showTop(ctx: BotContext, page: number, kind: "balance" | "weekly" = "balance") {
     const perPage = 10;
     const period = currentYekaterinburgWeek();
+    const excludedTelegramIds = this.topExcludedTelegramIds();
     const total =
-      kind === "weekly" ? this.repos.countWeeklyTopUsers(period.startIso, period.endIso) : this.repos.countTopUsers();
+      kind === "weekly"
+        ? this.repos.countWeeklyTopUsers(period.startIso, period.endIso, excludedTelegramIds)
+        : this.repos.countTopUsers(excludedTelegramIds);
     const safePage = Math.max(0, Math.min(page, Math.max(0, Math.ceil(total / perPage) - 1)));
     const mode = ctx.chat?.type === "private" ? "menu" : "chat";
     const text =
       kind === "weekly"
-        ? weeklyTopText(this.repos.weeklyTopUsers(period.startIso, period.endIso, perPage, safePage * perPage), safePage, total, period.label)
-        : topText(this.repos.topUsers(perPage, safePage * perPage), safePage, total);
+        ? weeklyTopText(
+            this.repos.weeklyTopUsers(period.startIso, period.endIso, perPage, safePage * perPage, excludedTelegramIds),
+            safePage,
+            total,
+            period.label,
+          )
+        : topText(this.repos.topUsers(perPage, safePage * perPage, excludedTelegramIds), safePage, total);
     await this.renderWithAsset(ctx, text, topKeyboard(kind, safePage, total, perPage, mode), "messages_banner_gif/other2.mp4");
   }
 
@@ -478,13 +495,13 @@ export class GameBotHandlers {
       await ctx.reply("Админ-панель доступна только в ЛС с ботом.");
       return;
     }
-    await this.renderWithAsset(ctx, adminText(), adminKeyboard(), "messages_banner_gif/under_consideration.mp4");
+    await this.renderWithAsset(ctx, adminText(), this.adminKeyboardFor(user), "messages_banner_gif/under_consideration.mp4");
   }
 
   private async showStats(ctx: BotContext) {
     const admin = await this.requireAdmin(ctx);
     if (!admin) return;
-    await render(ctx, statsText(this.repos.stats(), this.repos.topReceivers()), backAdminKeyboard());
+    await render(ctx, statsText(this.repos.stats(), this.repos.topReceivers(5, this.topExcludedTelegramIds())), backAdminKeyboard());
   }
 
   private async showAdminServices(ctx: BotContext, page = 0) {
@@ -1334,6 +1351,28 @@ export class GameBotHandlers {
     return;
   }
 
+  private async startCompensation(ctx: BotContext) {
+    const developer = await this.requireDeveloper(ctx);
+    if (!developer || !ctx.from) return;
+    if (ctx.chat?.type !== "private") {
+      await ctx.reply("Компенсацию можно оформить только в ЛС с ботом.");
+      return;
+    }
+
+    this.repos.setState(ctx.from.id, "compensation", "reason", {});
+    await render(
+      ctx,
+      [
+        `${pe(premiumEmoji.gift, "🎁")} <b>Компенсация</b>`,
+        "",
+        `Шаг 1: напиши причину компенсации. До ${formatAmount(maxCompensationReasonLength)} символов.`,
+        "",
+        "Эта причина будет отправлена участникам вместе с уведомлением о начислении.",
+      ].join("\n"),
+      cancelFlowKeyboard(),
+    );
+  }
+
   private async handleStateMessage(ctx: BotContext, user: UserRecord) {
     const state = this.repos.getState(user.telegram_id);
     if (!state || state.flow !== "broadcast") return false;
@@ -1536,6 +1575,14 @@ export class GameBotHandlers {
         return true;
       }
       await this.continueDonorTitleFlow(ctx, user, this.textWithCustomEmojiHtml(ctx, text));
+      return true;
+    }
+    if (state.flow === "compensation") {
+      if (!this.isDeveloper(user)) {
+        this.repos.clearState(user.telegram_id);
+        return false;
+      }
+      await this.continueCompensationFlow(ctx, user, state.step, data, text);
       return true;
     }
     if (!this.isAdmin(user)) {
@@ -1781,7 +1828,7 @@ export class GameBotHandlers {
       createdBy: admin.id,
     });
     this.repos.clearState(ctx.from.id);
-    await render(ctx, `Услуга создана: <b>${escapeHtml(service.title)}</b>.`, adminKeyboard());
+    await render(ctx, `Услуга создана: <b>${escapeHtml(service.title)}</b>.`, this.adminKeyboardFor(admin));
   }
 
   private async continuePromoFlow(ctx: BotContext, user: UserRecord, step: string, data: StateData, text: string) {
@@ -1841,6 +1888,181 @@ export class GameBotHandlers {
     }
   }
 
+  private async continueCompensationFlow(
+    ctx: BotContext,
+    developer: UserRecord,
+    step: string,
+    data: StateData,
+    text: string,
+  ) {
+    if (ctx.chat?.type !== "private") {
+      this.repos.clearState(developer.telegram_id);
+      await ctx.reply("Компенсацию можно оформить только в ЛС с ботом.");
+      return;
+    }
+
+    if (step === "reason") {
+      const reason = text.trim();
+      if (!reason || reason.length > maxCompensationReasonLength) {
+        await ctx.reply(`Причина должна быть от 1 до ${formatAmount(maxCompensationReasonLength)} символов.`, cancelFlowKeyboard());
+        return;
+      }
+
+      this.repos.setState(developer.telegram_id, "compensation", "amount", { reason });
+      await ctx.reply(
+        [
+          `${pe(premiumEmoji.gift, "🎁")} <b>Компенсация</b>`,
+          "",
+          "Шаг 2: введи количество Угольков для каждого участника.",
+          "",
+          `Целое число от 1 до ${formatAmount(maxEconomyAmount)}.`,
+        ].join("\n"),
+        { parse_mode: parseMode, ...cancelFlowKeyboard() } as never,
+      );
+      return;
+    }
+
+    if (step === "amount") {
+      const reason = String(data.reason ?? "").trim();
+      const amount = Number(text.replace(/\s+/g, ""));
+      if (!reason) {
+        this.repos.clearState(developer.telegram_id);
+        await ctx.reply("Причина компенсации потеряна. Начни заново.");
+        return;
+      }
+      if (!Number.isInteger(amount) || amount <= 0 || amount > maxEconomyAmount) {
+        await ctx.reply(`Количество должно быть целым числом от 1 до ${formatAmount(maxEconomyAmount)}.`);
+        return;
+      }
+
+      const preview = this.repos.previewCompensation(amount, this.compensationExcludedTelegramIds());
+      if (preview.recipients.length === 0) {
+        await ctx.reply("Нет подходящих получателей: developer, owner и админы исключены.", this.adminKeyboardFor(developer));
+        this.repos.clearState(developer.telegram_id);
+        return;
+      }
+      if (preview.blocked.length > 0) {
+        await ctx.reply(this.compensationBlockedText(amount, preview.blocked), {
+          parse_mode: parseMode,
+          ...noLinkPreview,
+          ...cancelFlowKeyboard(),
+        } as never);
+        return;
+      }
+
+      this.repos.setState(developer.telegram_id, "compensation", "confirm", { reason, amount });
+      await ctx.reply(this.compensationPreviewText(reason, amount, preview.recipients.length, preview.excludedCount), {
+        parse_mode: parseMode,
+        ...noLinkPreview,
+        ...compensationConfirmKeyboard(),
+      } as never);
+    }
+  }
+
+  private async confirmCompensation(ctx: BotContext) {
+    const developer = await this.requireDeveloper(ctx);
+    if (!developer || !ctx.from || !ctx.chat) return;
+    const state = this.repos.getState(ctx.from.id);
+    if (!state || state.flow !== "compensation" || state.step !== "confirm") {
+      throw new Error("Сценарий компенсации не найден");
+    }
+
+    const data = this.parseStateData(state.data) as CompensationData;
+    const reason = String(data.reason ?? "").trim();
+    const amount = Number(data.amount);
+    if (!reason || !Number.isInteger(amount) || amount <= 0 || amount > maxEconomyAmount) {
+      throw new Error("Данные компенсации некорректны");
+    }
+
+    const result = this.repos.applyCompensation({
+      amount,
+      reason,
+      developerUserId: developer.id,
+      excludedTelegramIds: this.compensationExcludedTelegramIds(),
+    });
+    this.repos.clearState(ctx.from.id);
+    await ctx.answerCbQuery("Компенсация начислена").catch(() => undefined);
+
+    const statusMessage = await ctx.reply("<b>Компенсация начислена. Отправляю уведомления...</b>", { parse_mode: parseMode });
+    let notified = 0;
+    let failed = 0;
+    for (const recipient of result.recipients) {
+      try {
+        await ctx.telegram.sendMessage(recipient.telegram_id, this.compensationNotificationText(reason, amount), {
+          parse_mode: parseMode,
+          ...noLinkPreview,
+        } as never);
+        notified += 1;
+        await new Promise((resolve) => setTimeout(resolve, broadcastDelayMs));
+      } catch (error) {
+        failed += 1;
+        logger.warn({ error, telegramId: recipient.telegram_id }, "compensation notification failed");
+      }
+    }
+
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      statusMessage.message_id,
+      undefined,
+      [
+        `${pe(premiumEmoji.check, "✅")} <b>Компенсация завершена</b>`,
+        "",
+        `Начислено участникам: <b>${formatAmount(result.recipients.length)}</b>`,
+        `Сумма каждому: <b>${formatCinders(amount)}</b>`,
+        `Исключено: <b>${formatAmount(result.excludedCount)}</b>`,
+        "",
+        `Уведомлено: <b>${formatAmount(notified)}</b>`,
+        `Ошибок доставки: <b>${formatAmount(failed)}</b>`,
+      ].join("\n"),
+      { parse_mode: parseMode, ...this.adminKeyboardFor(developer) } as never,
+    );
+  }
+
+  private compensationPreviewText(reason: string, amount: number, recipientsCount: number, excludedCount: number) {
+    return [
+      `${pe(premiumEmoji.gift, "🎁")} <b>Подтверждение компенсации</b>`,
+      "",
+      `${pe(premiumEmoji.info, "ℹ")} Причина:`,
+      escapeHtml(reason),
+      "",
+      `${pe(premiumEmoji.cinder, "💎")} Каждому участнику: <b>${formatCinders(amount)}</b>`,
+      `${pe(premiumEmoji.people, "👥")} Получателей: <b>${formatAmount(recipientsCount)}</b>`,
+      `${pe(premiumEmoji.lockClosed, "🔒")} Исключено: <b>${formatAmount(excludedCount)}</b>`,
+      "",
+      "Developer, owner и админы не получат компенсацию. Если подтвердить, начисление пройдет одной транзакцией.",
+    ].join("\n");
+  }
+
+  private compensationBlockedText(amount: number, blocked: { user: UserRecord; freeSpace: number }[]) {
+    const examples = blocked
+      .slice(0, 10)
+      .map((item, index) => `${index + 1}. ${mentionUser(item.user)} - свободно ${formatCinders(item.freeSpace)}`)
+      .join("\n");
+    const rest = blocked.length > 10 ? `\n...и еще ${formatAmount(blocked.length - 10)}.` : "";
+
+    return [
+      `${pe(premiumEmoji.cross, "❌")} <b>Компенсация не начата</b>`,
+      "",
+      `Для полной компенсации нужно место под <b>${formatCinders(amount)}</b> у каждого получателя.`,
+      `Не хватает лимита у: <b>${formatAmount(blocked.length)}</b> участников.`,
+      "",
+      examples + rest,
+      "",
+      "Начисление не выполнено никому. Укажи меньшую сумму или сначала освободи/увеличь лимиты.",
+    ].join("\n");
+  }
+
+  private compensationNotificationText(reason: string, amount: number) {
+    return [
+      `${pe(premiumEmoji.gift, "🎁")} <b>Компенсация</b>`,
+      "",
+      `${pe(premiumEmoji.info, "ℹ")} Причина:`,
+      escapeHtml(reason),
+      "",
+      `${pe(premiumEmoji.cinder, "💎")} Начислено: <b>${formatCinders(amount)}</b>`,
+    ].join("\n");
+  }
+
   private async confirmPromo(ctx: BotContext) {
     const admin = await this.requireAdmin(ctx);
     if (!admin || !ctx.from) return;
@@ -1854,7 +2076,7 @@ export class GameBotHandlers {
       createdBy: admin.id,
     });
     this.repos.clearState(ctx.from.id);
-    await render(ctx, `Промокод создан: <b>${escapeHtml(promo.code)}</b>.`, adminKeyboard());
+    await render(ctx, `Промокод создан: <b>${escapeHtml(promo.code)}</b>.`, this.adminKeyboardFor(admin));
   }
 
   private async continueCreateTitleFlow(ctx: BotContext, admin: UserRecord, text: string) {
@@ -1954,7 +2176,7 @@ export class GameBotHandlers {
         amount > 0
           ? `Для ${mentionUser(target)} установлена персональная наценка <b>+${formatCinders(amount)}</b> ко всем услугам за Угольки.`
           : `Персональная наценка для ${mentionUser(target)} снята.`;
-      await render(ctx, message, adminKeyboard());
+      await render(ctx, message, this.adminKeyboardFor(admin));
     }
   }
 
@@ -2014,7 +2236,7 @@ export class GameBotHandlers {
           `Успешно: <b>${formatAmount(broadcastSent)}</b>`,
           `Ошибок: <b>${formatAmount(broadcastFailed)}</b>`,
         ].join("\n"),
-        { parse_mode: parseMode, ...adminKeyboard() } as never,
+        { parse_mode: parseMode, ...this.adminKeyboardFor(admin) } as never,
       );
       await ctx.answerCbQuery().catch(() => undefined);
       return;
@@ -2033,7 +2255,7 @@ export class GameBotHandlers {
       await render(ctx, "Настройка титула отменена.", profileKeyboard(this.repos.donorStarsTotal(user.id) > 0));
       return;
     }
-    await render(ctx, "Действие отменено.", this.isAdmin(user) ? adminKeyboard() : backHomeKeyboard());
+    await render(ctx, "Действие отменено.", this.isAdmin(user) ? this.adminKeyboardFor(user) : backHomeKeyboard());
   }
 
   private async cancelBroadcast(ctx: BotContext) {
@@ -2042,7 +2264,8 @@ export class GameBotHandlers {
     const data = state?.flow === "broadcast" ? (this.parseStateData(state.data) as BroadcastData) : {};
     this.repos.clearState(ctx.from.id);
     await this.cleanupBroadcastPreview(ctx, data);
-    await render(ctx, "Рассылка отменена.", adminKeyboard());
+    const user = await this.ensureUser(ctx);
+    await render(ctx, "Рассылка отменена.", this.adminKeyboardFor(user));
     await ctx.answerCbQuery().catch(() => undefined);
   }
 
@@ -2057,6 +2280,7 @@ export class GameBotHandlers {
       if (lower === "угольки") return this.commandBalance(ctx, rest);
       if (lower === "мои" && rest[0]?.toLowerCase() === "угольки") return this.replyProfile(ctx, user);
       if (lower === "промокод") return this.commandPromo(ctx, user, rest);
+      if (lower === "компенсация") return this.startCompensationFromCommand(ctx, user);
       if (lower === "разжечь" || lower === "выдать") return this.commandGrant(ctx, user, rest);
       if (lower === "пригасить") return this.commandTake(ctx, user, rest);
     } catch (error) {
@@ -2187,6 +2411,15 @@ export class GameBotHandlers {
       parse_mode: parseMode,
       ...noLinkPreview,
     } as never);
+  }
+
+  private async startCompensationFromCommand(ctx: BotContext, user: UserRecord) {
+    if (!this.isDeveloper(user)) throw new Error("Команда доступна только разработчику.");
+    if (ctx.chat?.type !== "private") {
+      await ctx.reply("Компенсацию можно оформить только в ЛС с ботом.");
+      return;
+    }
+    await this.startCompensation(ctx);
   }
 
   private async replyWithEffect(
@@ -2382,8 +2615,38 @@ export class GameBotHandlers {
     return user;
   }
 
+  private async requireDeveloper(ctx: BotContext) {
+    const user = await this.ensureUser(ctx);
+    if (!this.isDeveloper(user)) {
+      await ctx.answerCbQuery?.("Доступно только разработчику").catch(() => undefined);
+      if (!("callback_query" in ctx.update)) await ctx.reply("Команда доступна только разработчику.");
+      return null;
+    }
+    return user;
+  }
+
   private isAdmin(user: UserRecord) {
     return user.role === "owner" || user.role === "admin" || user.role === "developer" || this.getConfig().adminIds.has(user.telegram_id);
+  }
+
+  private isDeveloper(user: UserRecord) {
+    return user.role === "developer" || user.telegram_id === this.getConfig().developerId;
+  }
+
+  private adminKeyboardFor(user: UserRecord) {
+    return adminKeyboard(this.isDeveloper(user));
+  }
+
+  private topExcludedTelegramIds() {
+    const developerId = this.getConfig().developerId;
+    return typeof developerId === "number" && Number.isInteger(developerId) ? [developerId] : [];
+  }
+
+  private compensationExcludedTelegramIds() {
+    const config = this.getConfig();
+    return [...config.adminIds, config.ownerId, config.developerId].filter(
+      (id): id is number => typeof id === "number" && Number.isInteger(id),
+    );
   }
 
   private async ensureUser(ctx: BotContext) {
