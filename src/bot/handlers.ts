@@ -5,7 +5,7 @@ import type { Message } from "telegraf/types";
 import type { AppConfig } from "../config/env.js";
 import type { Repositories } from "../db/repositories.js";
 import type { BotContext, PromoCodeRecord, ServiceRecord, UserRecord, UserRole } from "../types.js";
-import { escapeHtml, formatAmount, formatCinders, sanitizeDonorTitleHtml, usernameOrName } from "../utils/text.js";
+import { escapeHtml, formatAmount, formatCinders, mentionUser, sanitizeDonorTitleHtml } from "../utils/text.js";
 import { logger } from "../utils/logger.js";
 import {
   adminKeyboard,
@@ -919,7 +919,7 @@ export class GameBotHandlers {
     return [
       `${pe(premiumEmoji.lockClosed, "🔒")} <b>Не хватает места в лимите Угольков</b>`,
       "",
-      `${intro} У ${escapeHtml(usernameOrName(user))} недостаточно свободного места для этой суммы.`,
+      `${intro} У ${mentionUser(user)} недостаточно свободного места для этой суммы.`,
       "",
       `Сумма: <b>${formatCinders(amount)}</b>`,
       `Баланс получателя: <b>${formatCinders(user.balance)}</b>`,
@@ -1889,7 +1889,7 @@ export class GameBotHandlers {
     }
     this.repos.assignTitle(target.id, title.name);
     this.repos.clearState(admin.telegram_id);
-    await render(ctx, `Титул <b>${escapeHtml(title.name)}</b> выдан ${escapeHtml(usernameOrName(target))}.`, titlesMenuKeyboard());
+    await render(ctx, `Титул <b>${escapeHtml(title.name)}</b> выдан ${mentionUser(target)}.`, titlesMenuKeyboard());
   }
 
   private async continueRemoveTitleFlow(ctx: BotContext, admin: UserRecord, text: string) {
@@ -1900,7 +1900,7 @@ export class GameBotHandlers {
     }
     this.repos.assignTitle(target.id, null);
     this.repos.clearState(admin.telegram_id);
-    await render(ctx, `Титул снят с ${escapeHtml(usernameOrName(target))}.`, titlesMenuKeyboard());
+    await render(ctx, `Титул снят с ${mentionUser(target)}.`, titlesMenuKeyboard());
   }
 
   private async continuePriceAdjustmentFlow(
@@ -1920,7 +1920,7 @@ export class GameBotHandlers {
       this.repos.setState(admin.telegram_id, "price_adjustment", "amount", { targetUserId: target.id });
       await ctx.reply(
         [
-          `<b>${escapeHtml(usernameOrName(target))}</b>`,
+          `<b>${mentionUser(target)}</b>`,
           "",
           `Текущая персональная наценка: <b>${formatCinders(currentAdjustment)}</b>.`,
           "",
@@ -1951,8 +1951,8 @@ export class GameBotHandlers {
       this.repos.clearState(admin.telegram_id);
       const message =
         amount > 0
-          ? `Для ${escapeHtml(usernameOrName(target))} установлена персональная наценка <b>+${formatCinders(amount)}</b> ко всем услугам за Угольки.`
-          : `Персональная наценка для ${escapeHtml(usernameOrName(target))} снята.`;
+          ? `Для ${mentionUser(target)} установлена персональная наценка <b>+${formatCinders(amount)}</b> ко всем услугам за Угольки.`
+          : `Персональная наценка для ${mentionUser(target)} снята.`;
       await render(ctx, message, adminKeyboard());
     }
   }
@@ -2090,7 +2090,7 @@ export class GameBotHandlers {
     this.repos.transfer(from.id, target.user.id, amount);
     await this.replyWithEffect(
       ctx,
-      `${escapeHtml(usernameOrName(from))} подарил ${escapeHtml(usernameOrName(target.user))} <b>${formatCinders(amount)}</b>.`,
+      `${mentionUser(from)} подарил ${mentionUser(target.user)} <b>${formatCinders(amount)}</b>.`,
       messageEffects.heart,
       { parse_mode: parseMode, ...noLinkPreview } as never,
     );
@@ -2160,7 +2160,7 @@ export class GameBotHandlers {
     });
     await this.replyWithEffect(
       ctx,
-      `${escapeHtml(usernameOrName(target.user))} получил <b>${formatCinders(amount)}</b>.`,
+      `${mentionUser(target.user)} получил <b>${formatCinders(amount)}</b>.`,
       messageEffects.like,
       {
         parse_mode: parseMode,
@@ -2182,7 +2182,7 @@ export class GameBotHandlers {
       adminUserId: admin.id,
       reason: "Админское списание",
     });
-    await ctx.reply(`У ${escapeHtml(usernameOrName(target.user))} списано <b>${formatCinders(amount)}</b>.`, {
+    await ctx.reply(`У ${mentionUser(target.user)} списано <b>${formatCinders(amount)}</b>.`, {
       parse_mode: parseMode,
       ...noLinkPreview,
     } as never);

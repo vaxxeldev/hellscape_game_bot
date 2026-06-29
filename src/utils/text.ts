@@ -22,12 +22,27 @@ export function formatCinders(value: number) {
 
 export function usernameOrName(user: Pick<UserRecord, "username" | "first_name" | "last_name">) {
   if (user.username) return `@${user.username}`;
+  return userDisplayName(user);
+}
+
+export function userDisplayName(user: Pick<UserRecord, "username" | "first_name" | "last_name">) {
+  if (user.username) return user.username;
   return [user.first_name, user.last_name].filter(Boolean).join(" ") || "без имени";
 }
 
-export function mentionUser(user: UserRecord) {
-  const label = escapeHtml(usernameOrName(user));
+export function mentionUser(user: Pick<UserRecord, "telegram_id" | "username" | "first_name" | "last_name">) {
+  const label = escapeHtml(userDisplayName(user));
   return `<a href="tg://user?id=${user.telegram_id}">${label}</a>`;
+}
+
+export function topUserName(user: Pick<UserRecord, "username" | "first_name" | "last_name">, maxLength = 28) {
+  return escapeHtml(truncateDisplayName(userDisplayName(user), maxLength));
+}
+
+function truncateDisplayName(value: string, maxLength: number) {
+  const chars = Array.from(value.trim() || "без имени");
+  if (chars.length <= maxLength) return chars.join("");
+  return `${chars.slice(0, Math.max(0, maxLength - 3)).join("")}...`;
 }
 
 export function sanitizeDonorTitleHtml(input: string) {

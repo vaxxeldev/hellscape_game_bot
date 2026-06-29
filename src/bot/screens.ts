@@ -3,7 +3,7 @@ import type { Context, NarrowedContext } from "telegraf";
 import type { Update } from "telegraf/types";
 import type { AppConfig } from "../config/env.js";
 import type { PromoCodeRecord, PurchaseRecord, ServiceRecord, TitleRecord, UserRecord, WeeklyTopUserRecord } from "../types.js";
-import { escapeHtml, formatAmount, formatCinders, mentionUser, usernameOrName } from "../utils/text.js";
+import { escapeHtml, formatAmount, formatCinders, mentionUser, topUserName } from "../utils/text.js";
 import { formatDate, formatDateTime } from "../utils/time.js";
 import { pe, premiumEmoji } from "./premiumEmoji.js";
 
@@ -156,7 +156,7 @@ export function topText(users: UserRecord[], page: number, total: number) {
   const start = page * 10;
   const lines = users.map((user, index) => {
     const place = start + index + 1;
-    return `${place}. ${escapeHtml(usernameOrName(user))} — <b>${formatCinders(user.balance)}</b>`;
+    return `${place}. ${topUserName(user)} — <b>${formatCinders(user.balance)}</b>`;
   });
 
   return [
@@ -172,7 +172,7 @@ export function weeklyTopText(users: WeeklyTopUserRecord[], page: number, total:
   const start = page * 10;
   const lines = users.map((user, index) => {
     const place = start + index + 1;
-    return `${place}. ${escapeHtml(usernameOrName(user))} — <b>${formatCinders(user.weekly_score)}</b>`;
+    return `${place}. ${topUserName(user)} — <b>${formatCinders(user.weekly_score)}</b>`;
   });
 
   return [
@@ -251,7 +251,7 @@ export function statsText(stats: ReturnType<{ stats(): unknown }["stats"]>, topR
   };
   const receivers = topReceivers.length
     ? topReceivers
-        .map((user, index) => `${index + 1}. ${escapeHtml(usernameOrName(user))} — ${formatCinders(user.total_received)}`)
+        .map((user, index) => `${index + 1}. ${mentionUser(user)} — ${formatCinders(user.total_received)}`)
         .join("\n")
     : "нет данных";
 
@@ -277,7 +277,7 @@ export function purchaseText(purchase: PurchaseRecord) {
   return [
     `${pe(premiumEmoji.file, "📁")} <b>Заявка #${purchase.id}</b>`,
     "",
-    `${pe(premiumEmoji.profile, "👤")} Пользователь: ${escapeHtml(usernameOrName(purchase))} (<code>${purchase.telegram_id}</code>)`,
+    `${pe(premiumEmoji.profile, "👤")} Пользователь: ${mentionUser(purchase)} (<code>${purchase.telegram_id}</code>)`,
     `${pe(premiumEmoji.gift, "🎁")} Услуга: <b>${escapeHtml(purchase.service_title)}</b>`,
     `${pe(premiumEmoji.money, "🪙")} Цена: <b>${formatCinders(purchase.price)}</b>`,
     `${pe(premiumEmoji.loading, "🔄")} Статус: <b>${purchaseStatusLabel(purchase.status)}</b>`,
@@ -299,7 +299,7 @@ export function promoText(promo: PromoCodeRecord, users: UserRecord[]) {
   const status = promo.is_active ? "включен" : "выключен";
   const activationsLeft = Math.max(0, promo.max_uses - promo.used_count);
   const lastUsers = users.length
-    ? users.map((user, index) => `${index + 1}. ${escapeHtml(usernameOrName(user))}`).join("\n")
+    ? users.map((user, index) => `${index + 1}. ${mentionUser(user)}`).join("\n")
     : "активаций еще нет";
 
   return [
