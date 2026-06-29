@@ -51,6 +51,10 @@ export function backHomeKeyboard() {
   return inlineKeyboard([[callbackButton("Назад", "menu:home", premiumEmoji.down)]]);
 }
 
+export function backAdminKeyboard() {
+  return inlineKeyboard([[callbackButton("Назад", "admin:home", premiumEmoji.down)]]);
+}
+
 export function profileKeyboard(canManageDonorTitle: boolean) {
   const rows: InlineButton[][] = [];
   if (canManageDonorTitle) rows.push([callbackButton("Донатный титул", "donor_title:menu", premiumEmoji.cinder, "primary")]);

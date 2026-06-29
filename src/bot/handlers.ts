@@ -12,6 +12,7 @@ import {
   adminServiceKeyboard,
   adminServicesKeyboard,
   approvalModeKeyboard,
+  backAdminKeyboard,
   backHomeKeyboard,
   broadcastButtonChoiceKeyboard,
   broadcastCancelKeyboard,
@@ -483,7 +484,7 @@ export class GameBotHandlers {
   private async showStats(ctx: BotContext) {
     const admin = await this.requireAdmin(ctx);
     if (!admin) return;
-    await render(ctx, statsText(this.repos.stats(), this.repos.topReceivers()), backHomeKeyboard());
+    await render(ctx, statsText(this.repos.stats(), this.repos.topReceivers()), backAdminKeyboard());
   }
 
   private async showAdminServices(ctx: BotContext, page = 0) {
@@ -1137,7 +1138,7 @@ export class GameBotHandlers {
     if (!admin) return;
     const purchase = this.repos.reviewPurchase(purchaseId, status, admin.id);
     await ctx.answerCbQuery(status === "approved" ? "Заявка одобрена" : "Заявка отклонена").catch(() => undefined);
-    await render(ctx, purchaseText(purchase), backHomeKeyboard());
+    await render(ctx, purchaseText(purchase), backAdminKeyboard());
     await this.bot.telegram
       .sendMessage(
         purchase.telegram_id,
